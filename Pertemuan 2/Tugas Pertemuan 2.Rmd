@@ -1,0 +1,170 @@
+---
+title: "TUGAS MPDW PERTEMUAN 1"
+author: "JASMINE RAMYA YOLIEZHA"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Library dan Impor Data
+
+```{r}
+library(forecast)
+library(graphics)
+library(TTR)
+library(TSA)
+library(readxl)
+library(ggplot2)
+```
+
+# Mengimpor data sheet 'Anggota_2'
+```{r}
+data_cuaca <- read_excel("Cuaca_Bogor_1200_Data_5_Anggota.xlsx", sheet = "Anggota_2")
+```
+
+# Mengubah menjadi objek time series (Siklus musiman harian = 24 jam)
+Menggunakan kolom ke-4 "Suhu Rata Rata (°C)"
+```{r}
+cuaca.ts <- ts(data_cuaca[[4]], frequency = 24)
+```
+
+# Pembagian Data dan Eksplorasi
+Total observasi adalah 240. Data dibagi menjadi 80% data latih (192 observasi) dan 20% data uji (48 observasi).
+```{r}
+n <- nrow(data_cuaca)
+n_train <- floor(0.8 * n)
+
+#  Pembagian data
+train_data <- data_cuaca[1:n_train, ]
+test_data  <- data_cuaca[(n_train+1):n, ]
+
+train.ts <- ts(train_data[[4]], frequency = 24)
+test.ts  <- ts(test_data[[4]], frequency = 24)
+
+#  Plot Data
+ggplot() + 
+  geom_line(data = train_data, aes(x = No, y = `Suhu Rata Rata (°C)`, col = "Data Latih")) +
+  geom_line(data = test_data, aes(x = No, y = `Suhu Rata Rata (°C)`, col = "Data Uji")) +
+  labs(x = "Periode Waktu (Jam)", y = "Suhu (°C)", title = "Plot Data Suhu Rata-Rata") +
+  scale_colour_manual(name="Keterangan:", values = c("blue", "red")) + 
+  theme_bw() + theme(legend.position = "bottom")
+```
+
+# Moving Average
+
+## Single Moving Average (SMA)
+Pemulusan menggunakan $m=4$.
+```{r}
+m_val <- 4
+sma_model <- SMA(train.ts, n=m_val)
+ramalan_sma <- c(NA, sma_model)
+
+#  Forecast konstan untuk sisa periode
+forecast_sma <- rep(ramalan_sma[length(ramalan_sma)], length(test.ts))
+
+#  Akurasi Data Uji SMA
+error_sma <- test.ts - forecast_sma
+MAPE_sma <- mean(abs(error_sma / test.ts * 100))
+cat("MAPE Testing SMA:", MAPE_sma, "%\n")
+```
+
+## Double Moving Average (DMA)
+```{r}
+dma_model <- SMA(sma_model, n = m_val)
+At <- 2*sma_model - dma_model
+Bt <- 2/(m_val-1)*(sma_model - dma_model)
+
+#  Forecast DMA
+f_dma <- c()
+for (i in 1:length(test.ts)) {
+  f_dma[i] <- At[length(At)] + Bt[length(Bt)] * i
+}
+
+#  Akurasi Data Uji DMA
+error_dma <- test.ts - f_dma
+MAPE_dma <- mean(abs(error_dma / test.ts * 100))
+cat("MAPE Testing DMA:", MAPE_dma, "%\n")
+```
+
+# Exponential Smoothing
+
+## Single Exponential Smoothing (SES)
+Menggunakan parameter optimal alpha = NULL.
+```{r}
+ses_opt <- HoltWinters(train.ts, gamma = FALSE, beta = FALSE, alpha = NULL)
+forecast_ses <- forecast(ses_opt, h=length(test.ts))
+
+cat("Akurasi Testing SES:\n")
+accuracy(forecast_ses, as.numeric(test.ts))
+```
+
+## Double Exponential Smoothing (DES)
+Menggunakan parameter optimal tanpa komponen musiman.
+```{r}
+des_opt <- HoltWinters(train.ts, gamma = FALSE, alpha = NULL, beta = NULL)
+forecast_des <- forecast(des_opt, h=length(test.ts))
+
+cat("Akurasi Testing DES:\n")
+accuracy(forecast_des, as.numeric(test.ts))
+```
+
+# Seasonal Smoothing (Holt-Winters)
+
+## Winter Aditif
+```{r}
+winter_add <- HoltWinters(train.ts, seasonal = "additive")
+forecast_add <- forecast(winter_add, h=length(test.ts))
+
+cat("Akurasi Testing Winter Aditif:\n")
+accuracy(forecast_add, as.numeric(test.ts))
+```
+
+## Winter Multiplikatif
+```{r}
+winter_mul <- HoltWinters(train.ts, seasonal = "multiplicative")
+forecast_mul <- forecast(winter_mul, h=length(test.ts))
+
+cat("Akurasi Testing Winter Multiplikatif:\n")
+accuracy(forecast_mul, as.numeric(test.ts))
+```
+
+## Visualisasi Perbandingan Holt-Winters
+```{r}
+## Visualisasi Perbandingan Holt-Winters
+plot(1:192, as.numeric(train.ts), main="Perbandingan Peramalan Holt-Winters pada Data Uji", 
+     type="l", col="black", xlim=c(180, 240), ylim=c(20, 32), ylab="Suhu", xlab="Periode")
+lines(193:240, as.numeric(test.ts), col="black", lty=2)
+lines(193:240, as.numeric(forecast_add$mean), col="red", lwd=2)
+lines(193:240, as.numeric(forecast_mul$mean), col="blue", lwd=2)
+legend("topleft", legend=c("Aktual (Latih)", "Aktual (Uji)", "Winter Aditif", "Winter Multiplikatif"),
+       col=c("black", "black", "red", "blue"), lty=c(1, 2, 1, 1), cex=0.8)
+```
+
+# Perbandingan Kinerja Metode (Berdasarkan Nilai MAPE Data Uji)
+
+```{r}
+#  Membuat tabel rekapitulasi nilai MAPE untuk membandingkan kinerja metode
+rekap_akurasi <- data.frame(
+  Metode_Pemulusan = c("SMA (m=4)", "DMA (m=4)", "SES", "DES", 
+                       "Winter Aditif", "Winter Multiplikatif"),
+  MAPE_Testing = c(7.25, 75.26, 7.50, 7.50, 3.39, 3.34),
+  Kategori = c("Sangat Baik", "Buruk", "Sangat Baik", "Sangat Baik", 
+               "Sangat Baik", "Terbaik")
+)
+
+#  Menampilkan tabel
+print(rekap_akurasi)
+```
+
+Semakin kecil nilai persentase MAPE, semakin tinggi tingkat akurasi peramalan model terhadap data aktual.
+
+## Penentuan Metode Terbaik dan Alasan
+Berdasarkan perbandingan metrik akurasi MAPE di atas, metode terbaik untuk memodelkan data Suhu Rata Rata (°C) adalah Holt-Winters Multiplikatif dengan tingkat error paling kecil yaitu 3.34%.
+
+1. Kehadiran Pola Musiman: Data suhu udara memiliki siklus fluktuasi harian yang berulang secara teratur setiap 24 jam (pola musiman/seasonal). Algoritma Holt-Winters secara khusus didesain dengan parameter ketiga (gamma) untuk menangkap pola berulang tersebut.  
+
+2. Keterbatasan Model Dasar: Metode SMA dan SES menghasilkan garis proyeksi yang mendatar sehingga tidak mampu mengikuti gelombang siklus suhu pada data uji.  Kesalahan Proyeksi Tren: Metode DMA dan DES berupaya menangkap komponen tren sesaat. Karena potongan akhir dari data latih  berada pada fase suhu yang sedang turun di malam hari, model ini berasumsi suhu akan terus merosot tajam tanpa batas, yang mengakibatkan tingkat error sangat membengkak hingga di atas 50%.
+
+
+
+
+
